@@ -22,7 +22,7 @@ const server = http.createServer((req, res) => {
 });
 const wss = new WebSocketServer({ server, path: webSocketPath });
 wss.on('connection', socket => {
-  let voice; let startedAt; let exotelStream;
+  let voice; let startedAt; let exotelStream; let exotelOutbound = Buffer.alloc(0);
   const send = payload => { if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(payload)); };
   const closeVoice = async () => { if (voice) await voice.close(); voice = undefined; };
   const startExotel = async message => {
@@ -39,11 +39,19 @@ wss.on('connection', socket => {
       lead: { phone: start.from, exotelCallSid: start.call_sid, ...(start.custom_parameters || {}) }
     });
     voice.onAudio(chunk => {
-      const audio = resamplePcm16(chunk, 24000, sampleRate);
-      if (audio.length) send({ event: 'media', stream_sid: streamSid, media: { payload: audio.toString('base64') } });
+      // Exotel requires 3,200–100,000 byte PCM frames, in multiples of 320.
+      exotelOutbound = Buffer.concat([exotelOutbound, resamplePcm16(chunk, 24000, sampleRate)]);
+      while (exotelOutbound.length >= 3200) {
+        const bytes = Math.floor(Math.min(exotelOutbound.length, 16000) / 320) * 320;
+        const audio = exotelOutbound.subarray(0, bytes);
+        exotelOutbound = exotelOutbound.subarray(bytes);
+        send({ event: 'media', stream_sid: streamSid, media: { payload: audio.toString('base64') } });
+      }
     });
     voice.onError(error => console.error('Exotel AgentStream voice error:', error.message));
     voice.onEvent(event => console.log('Exotel AgentStream event:', event.type, Date.now() - startedAt));
+    // Telephony calls need an explicit first turn; waiting for caller audio produces silence.
+    await voice.sendText('Start the call now. Speak only the configured opening line, then listen.');
   };
   socket.on('message', async raw => {
     try {
