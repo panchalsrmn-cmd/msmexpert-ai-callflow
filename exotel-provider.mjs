@@ -6,8 +6,13 @@ export async function startExotelCall({to,callId}) {
   const streamUrl=required('EXOTEL_STREAM_URL');
   const apiDomain=(process.env.EXOTEL_API_DOMAIN||'https://api.exotel.com').replace(/\/$/,'');
   // AgentStream connects the answered customer call directly to our VoiceBot WebSocket.
-  const form=new URLSearchParams({from:to,callerid:callerId,streamurl:streamUrl,streamtype:'bidirectional',customfield:callId});
-  const response=await fetch(`${apiDomain}/v1/accounts/${encodeURIComponent(accountSid)}/calls/connect`,{method:'POST',headers:{authorization:`Basic ${Buffer.from(`${apiKey}:${apiToken}`).toString('base64')}`,'content-type':'application/x-www-form-urlencoded',accept:'application/json'},body:form});
-  const payload=await response.json().catch(()=>({})); if(!response.ok) throw new Error(payload?.RestException?.Message||payload?.message||`Exotel returned HTTP ${response.status}.`);
+  const form=new FormData();
+  for (const [name, value] of Object.entries({ From:callerId, To:to, CallerId:callerId, streamurl:streamUrl, streamtype:'bidirectional', CustomField:callId })) form.append(name, value);
+  const response=await fetch(`${apiDomain}/v1/Accounts/${encodeURIComponent(accountSid)}/Calls/connect.json`,{method:'POST',headers:{authorization:`Basic ${Buffer.from(`${apiKey}:${apiToken}`).toString('base64')}`,accept:'application/json'},body:form});
+  const payload=await response.json().catch(()=>({}));
+  if(!response.ok) {
+    const detail=payload?.RestException?.Message||payload?.message||payload?.error||JSON.stringify(payload).slice(0,500);
+    throw new Error(`Exotel returned HTTP ${response.status}: ${detail || 'Unknown error.'}`);
+  }
   const sid=payload?.Call?.Sid||payload?.Sid; if(!sid) throw new Error('Exotel did not return a call SID.'); return {providerCallId:sid,rawStatus:payload?.Call?.Status};
 }
