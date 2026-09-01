@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { WebSocketServer } from 'ws';
 import { GeminiLiveVoiceProvider } from './voice/providers/gemini-live.provider.js';
 import { resamplePcm16 } from './voice/audio/codec.js';
-import { createCrmBackend, finishCrmCall, initialiseCrm, startCrmCall } from './voice/crm/postgres-crm.mjs';
+import { createCrmBackend, finishCrmCall, initialiseCrm, saveRecording, saveTranscript, startCrmCall } from './voice/crm/postgres-crm.mjs';
 
 const envFile = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf8') : '';
 for (const line of envFile.split(/\r?\n/)) { const match = line.match(/^([A-Z0-9_]+)=(.*)$/); if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, ''); }
@@ -13,6 +13,20 @@ export function createVoiceServer({ webSocketPath = '/live', healthPath = '/heal
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.VOICE_ALLOWED_ORIGIN || 'http://127.0.0.1:5173');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  if (req.method === 'GET' && url.pathname === '/exotel/stream-complete') {
+    const providerCallId = url.searchParams.get('callsid') || url.searchParams.get('call_sid');
+    saveRecording({
+      providerCallId,
+      recordingUrl: url.searchParams.get('recordingurl') || url.searchParams.get('recording_url'),
+      disposition: url.searchParams.get('status') || url.searchParams.get('disposition'),
+      durationSeconds: url.searchParams.get('duration'),
+    }).then(() => json(res, 200, { ok: true })).catch(error => {
+      console.error('Exotel recording callback error:', error.message);
+      json(res, 500, { ok: false });
+    });
+    return;
+  }
   if (req.url === healthPath) return json(res, 200, { ok: true, provider: 'gemini-live', model: config.model, voice: config.voiceName, configured: Boolean(config.apiKey) });
   json(res, 404, { error: 'Not found' });
 });
@@ -47,6 +61,11 @@ wss.on('connection', socket => {
     });
     voice.onError(error => console.error('Exotel AgentStream voice error:', error.message));
     voice.onEvent(event => console.log('Exotel AgentStream event:', event.type, Date.now() - startedAt));
+    voice.onTranscript(event => saveTranscript({
+      callId: crmCall.call?.id,
+      speaker: event.type === 'assistant.transcript' ? 'MEERA' : 'CUSTOMER',
+      text: event.text,
+    }).catch(error => console.error('CRM transcript save error:', error.message)));
     // Telephony calls need an explicit first turn; waiting for caller audio produces silence.
     await voice.sendText('Start the call now. Speak only the configured opening line, then listen.');
   };
