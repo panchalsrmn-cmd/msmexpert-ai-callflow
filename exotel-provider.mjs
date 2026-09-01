@@ -3,15 +3,21 @@ function required(name) { const value=process.env[name]; if(!value) throw new Er
 export function exotelEnabled() { return process.env.TELEPHONY_PROVIDER==='exotel'; }
 export async function startExotelCall({to,callId}) {
   const accountSid=required('EXOTEL_ACCOUNT_SID'),apiKey=required('EXOTEL_API_KEY'),apiToken=required('EXOTEL_API_TOKEN'),callerId=required('EXOTEL_FROM_NUMBER');
-  const flowUrl=process.env.EXOTEL_FLOW_URL;
   const streamUrl=process.env.EXOTEL_STREAM_URL;
   const apiDomain=(process.env.EXOTEL_API_DOMAIN||'https://api.exotel.com').replace(/\/$/,'');
-  if (!flowUrl && !streamUrl) throw new Error('EXOTEL_FLOW_URL or EXOTEL_STREAM_URL is required for AI calling.');
-  // Legacy Connect APIs route streaming calls through a VoiceBot applet flow.
+  if (!streamUrl) throw new Error('EXOTEL_STREAM_URL is required for AI calling.');
+
+  // AgentStream's direct Voice AI mode dials the customer itself and attaches
+  // the answered leg to our bot. Do not send a `To` field: that invokes the
+  // old two-number bridge and rings the account owner's configured number.
   const form=new FormData();
-  const fields=flowUrl
-    ? { From:callerId, To:to, CallerId:callerId, url:flowUrl, CustomField:callId }
-    : { From:callerId, To:to, CallerId:callerId, streamurl:streamUrl, streamtype:'bidirectional', CustomField:callId };
+  const fields={
+    from:to,
+    callerid:callerId,
+    streamurl:streamUrl,
+    streamtype:'bidirectional',
+    customfield:callId,
+  };
   for (const [name, value] of Object.entries(fields)) form.append(name, value);
   const response=await fetch(`${apiDomain}/v1/Accounts/${encodeURIComponent(accountSid)}/Calls/connect.json`,{method:'POST',headers:{authorization:`Basic ${Buffer.from(`${apiKey}:${apiToken}`).toString('base64')}`,accept:'application/json'},body:form});
   const payload=await response.json().catch(()=>({}));
