@@ -27,7 +27,15 @@ class GeminiLiveSession extends RealtimeVoiceSession {
   fail(error) { this.errors.forEach(cb => cb(error instanceof Error ? error : new Error(String(error)))); this.emit('error', { message: String(error?.message || error) }); }
   async sendAudio(chunk, sampleRate = 16000) { if (this.closed) return; const pcm = pcm16To16k(chunk, sampleRate); this.session.sendRealtimeInput({ media: { data: pcm.toString('base64'), mimeType: 'audio/pcm;rate=16000' } }); }
   async endAudio() { if (!this.closed) this.session.sendRealtimeInput({ audioStreamEnd: true }); }
-  async sendText(text) { if (!this.closed) this.session.sendClientContent({ turns: text, turnComplete: true }); }
+  async sendText(text) {
+    if (this.closed) return;
+
+    // Gemini Live expects structured Content objects, not a bare string.
+    this.session.sendClientContent({
+      turns: [{ role: 'user', parts: [{ text }] }],
+      turnComplete: true,
+    });
+  }
   async interrupt() { this.queue.cancel(); this.emit('assistant.interrupted'); }
   async close() { this.closed = true; this.queue.cancel(); this.session?.close(); }
   async handle(message) {
