@@ -1,0 +1,8 @@
+import {describe,it,expect} from 'vitest';
+import {createHmac} from 'node:crypto';
+import {verifyWebhook,WebhookSignatureError,TelephonyWebhookService} from './webhook';
+import {MockTelephonyProvider} from './mock-provider';
+import {CapacityGate} from '../../domain/campaign';
+import {CallOrchestrator} from '../services/call-orchestrator';
+describe('telephony webhook safety',()=>{it('rejects forged webhook payloads',()=>expect(()=>verifyWebhook('{"event":1}','bad','secret')).toThrow(WebhookSignatureError));it('persists and enqueues each event once',async()=>{let persisted=0,enqueued=0;const service=new TelephonyWebhookService({persist:async()=>{persisted++},enqueue:async()=>{enqueued++}});const event={eventId:'evt_1',providerCallId:'pc_1',type:'call.answered' as const,occurredAt:'2026-08-21T10:00:00Z',metadata:{}};await service.process(event);await service.process(event);expect([persisted,enqueued]).toEqual([1,1])});it('verifies an authentic signature',()=>{const body='{"event":1}',secret='secret';expect(()=>verifyWebhook(body,createHmac('sha256',secret).update(body).digest('hex'),secret)).not.toThrow()})});
+describe('call orchestration',()=>{it('releases capacity and queues safe retries',async()=>{const provider=new MockTelephonyProvider(),jobs:any[]=[];const queue={enqueue:async(...args:any[])=>{jobs.push(args)}};const orchestrator=new CallOrchestrator(provider,queue,new CapacityGate(1));expect((await orchestrator.initiate({callId:'c1',campaignId:'p',from:'+919876543210',to:'+919876543211',webhookUrl:'https://example.test'})).started).toBe(true);await orchestrator.complete({callId:'c1',leadStatus:'FAILED',reason:'NETWORK_ERROR',attempt:1,maxAttempts:3});expect(jobs).toHaveLength(1)})});

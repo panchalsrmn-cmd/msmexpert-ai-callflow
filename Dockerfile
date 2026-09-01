@@ -1,0 +1,11 @@
+FROM node:24-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY voice ./voice
+COPY voice-api.mjs ./
+ENV NODE_ENV=production
+ENV PORT=3002
+ENV VOICE_HOST=0.0.0.0
+EXPOSE 3002
+CMD ["node", "voice-api.mjs"]

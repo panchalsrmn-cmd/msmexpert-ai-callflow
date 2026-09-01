@@ -1,0 +1,1 @@
+.compose .listen-button{background:#eef1ff;color:#4e66d8;border:1px solid #dbe2ff;padding:0 9px;white-space:nowrap}.compose .listen-button.listening{background:#fff0f1;color:#d64e62;border-color:#ffc8cf;animation:listen-pulse 1s infinite}.compose .listen-button:disabled{opacity:.6;cursor:not-allowed}@keyframes listen-pulse{50%{box-shadow:0 0 0 5px #ef718622}}
