@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import { WebSocketServer } from 'ws';
 import { GeminiLiveVoiceProvider } from './voice/providers/gemini-live.provider.js';
+import { resamplePcm16 } from './voice/audio/codec.js';
 
 const envFile = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf8') : '';
 for (const line of envFile.split(/\r?\n/)) { const match = line.match(/^([A-Z0-9_]+)=(.*)$/); if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, ''); }
@@ -21,11 +22,41 @@ const server = http.createServer((req, res) => {
 });
 const wss = new WebSocketServer({ server, path: webSocketPath });
 wss.on('connection', socket => {
-  let voice; let startedAt;
+  let voice; let startedAt; let exotelStream;
   const send = payload => { if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(payload)); };
+  const closeVoice = async () => { if (voice) await voice.close(); voice = undefined; };
+  const startExotel = async message => {
+    if (voice) return;
+    const start = message.start || {};
+    const mediaFormat = start.media_format || {};
+    const sampleRate = Number(mediaFormat.sample_rate) || 8000;
+    const streamSid = start.stream_sid || message.stream_sid;
+    if (!streamSid) throw new Error('Exotel start event is missing stream_sid.');
+    exotelStream = { streamSid, sampleRate };
+    startedAt = Date.now();
+    voice = await new GeminiLiveVoiceProvider({ ...config, backend }).connect({
+      callId: start.call_sid || streamSid,
+      lead: { phone: start.from, exotelCallSid: start.call_sid, ...(start.custom_parameters || {}) }
+    });
+    voice.onAudio(chunk => {
+      const audio = resamplePcm16(chunk, 24000, sampleRate);
+      if (audio.length) send({ event: 'media', stream_sid: streamSid, media: { payload: audio.toString('base64') } });
+    });
+    voice.onError(error => console.error('Exotel AgentStream voice error:', error.message));
+    voice.onEvent(event => console.log('Exotel AgentStream event:', event.type, Date.now() - startedAt));
+  };
   socket.on('message', async raw => {
     try {
       const message = JSON.parse(raw.toString());
+      // Exotel AgentStream / VoiceBot protocol: raw linear PCM, base64 encoded.
+      if (message.event === 'connected') return;
+      if (message.event === 'start') return startExotel(message);
+      if (message.event === 'media') {
+        if (!voice || !exotelStream) throw new Error('Exotel media arrived before start.');
+        return voice.sendAudio(Buffer.from(message.media?.payload || '', 'base64'), exotelStream.sampleRate);
+      }
+      if (message.event === 'stop') { await closeVoice(); return socket.close(); }
+      if (message.event === 'dtmf') return;
       if (message.type === 'start') {
         if (voice) return;
         startedAt = Date.now();
@@ -39,10 +70,10 @@ wss.on('connection', socket => {
       if (message.type === 'audio.end') return voice.endAudio();
       if (message.type === 'text') return voice.sendText(String(message.text || ''));
       if (message.type === 'interrupt') return voice.interrupt();
-      if (message.type === 'end') { await voice.close(); voice = undefined; return socket.close(); }
+      if (message.type === 'end') { await closeVoice(); return socket.close(); }
     } catch (error) { send({ type: 'error', message: error instanceof Error ? error.message : 'Invalid voice message.' }); }
   });
-  socket.on('close', () => voice?.close());
+  socket.on('close', () => closeVoice());
 });
 return server;
 }

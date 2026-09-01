@@ -12,9 +12,9 @@ The playground streams microphone PCM to `ws://127.0.0.1:3002/live`. The backend
 
 ## Public deployment for Exotel
 
-Deploy the included `Dockerfile` to a host that supports public HTTPS/WSS and map `voice.mormslunch.store` to the host's supplied A-record address or CNAME. Set `VOICE_HOST=0.0.0.0`, `VOICE_ALLOWED_ORIGIN=https://mormslunch.store`, and a private `GEMINI_API_KEY` in the host's secret manager. Do not expose the key in browser code or DNS records.
+Deploy the included `Dockerfile` to a host that supports public HTTPS/WSS and map `voice.momslunch.store` to the host's supplied A-record address or CNAME. Set `VOICE_HOST=0.0.0.0`, `VOICE_ALLOWED_ORIGIN=https://momslunch.store`, and a private `GEMINI_API_KEY` in the host's secret manager. Do not expose the key in browser code or DNS records.
 
-After deployment, confirm `https://voice.mormslunch.store/health` is reachable and configure Exotel AgentStream with `wss://voice.mormslunch.store/live`. Exotel must provide/enable the AgentStream call flow; the legacy Connect API only dials the customer and does not stream live call audio to this gateway.
+After deployment, confirm `https://voice.momslunch.store/health` is reachable and set `EXOTEL_STREAM_URL=wss://voice.momslunch.store/live?sample-rate=8000`. The call request uses Exotel AgentStream's `streamurl` and `streamtype=bidirectional` fields, and this gateway handles the VoiceBot `connected`, `start`, `media`, and `stop` events using raw linear16 PCM.
 
 ## Existing telephony connection
 

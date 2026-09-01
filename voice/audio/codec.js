@@ -8,6 +8,19 @@ export function pcm16To16k(input, sourceRate = 16000) {
   return output;
 }
 
+/** Resample signed little-endian PCM16 for a telephony transport. */
+export function resamplePcm16(input, sourceRate, targetRate) {
+  if (sourceRate === targetRate) return Buffer.from(input);
+  const source = new Int16Array(input.buffer, input.byteOffset, Math.floor(input.byteLength / 2));
+  if (!source.length) return Buffer.alloc(0);
+  const count = Math.max(1, Math.floor(source.length * targetRate / sourceRate));
+  const output = Buffer.alloc(count * 2);
+  for (let i = 0; i < count; i++) {
+    output.writeInt16LE(source[Math.min(source.length - 1, Math.floor(i * sourceRate / targetRate))], i * 2);
+  }
+  return output;
+}
+
 export function mulawToPcm16(input) {
   const out = Buffer.alloc(input.length * 2);
   for (let i = 0; i < input.length; i++) {
