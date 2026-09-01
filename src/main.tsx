@@ -2,16 +2,13 @@ import React, {useMemo, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Activity, Bell, BookOpen, Bot, CalendarClock, ChevronDown, ChevronRight, CircleHelp, FileText, Gauge, Headphones, LayoutDashboard, Menu, Phone, PhoneCall, Play, Plus, Search, Settings, ShieldCheck, Sparkles, Users, X, Zap} from 'lucide-react';
 import './styles.css';
+import './production.css';
 import './meera-voice';
 import './meera-listen';
 import {MeeraPlayground} from './meera-playground';
 
 type Intent='INTERESTED'|'CALLBACK_REQUEST'|'ASK_ZED'|'DO_NOT_CALL'|'ASK_HUMAN'|'UNKNOWN';
-const initialMessages=[
-  {speaker:'Meera',type:'ai',text:'Hello Sir, Namaste! Main MSMExpert.com se Meera, AI Assistant bol rahi hoon. Kya main aapke do minute le sakti hoon?',time:'10:42:03'},
-  {speaker:'Rajesh Kumar',type:'customer',text:'Haan boliye, ZED certification ke baare mein jaana tha.',time:'10:42:10'},
-  {speaker:'Meera',type:'ai',text:'Bilkul Sir. ZED ke liye aapki company ka Udyam registration hai kya?',time:'10:42:13'}
-];
+const initialMessages=[];
 function App(){
  const [page,setPage]=useState('Dashboard'); const [drawer,setDrawer]=useState(false); const [messages,setMessages]=useState(initialMessages); const [input,setInput]=useState(''); const [state,setState]=useState('QUALIFY_UDYAM'); const [playing,setPlaying]=useState(false);
  const intent=useMemo<Intent>(()=>/call.*mat|don.t call|not interested/i.test(input)?'DO_NOT_CALL':/human|representative|agent/i.test(input)?'ASK_HUMAN':/callback|baad/i.test(input)?'CALLBACK_REQUEST':/zed|certification/i.test(input)?'ASK_ZED':/haan|yes|interested/i.test(input)?'INTERESTED':'UNKNOWN',[input]);

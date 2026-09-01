@@ -1,0 +1,12 @@
+/* Production launch mode: never display sample prospects, counts, outcomes, or campaigns. */
+.metrics,.dashboard-grid,.table-card,.sim-wrap{display:none}
+
+.hero{padding-bottom:42px}
+.hero:after{content:'Production CRM is ready. Live call activity, customer outcomes, callbacks, and do-not-call requests will appear here after your first campaign.';display:block;position:absolute;left:40px;right:40px;top:170px;max-width:720px;padding:18px 20px;background:#fff;border:1px solid var(--line);border-radius:10px;color:var(--muted);line-height:1.5}
+.hero{position:relative;min-height:220px}
+
+.lead-table .lead{display:none}
+.lead-table:after{content:'No live leads yet. Customer records will appear here when Meera completes calls.';display:block;padding:28px 16px;color:var(--muted);text-align:center}
+
+.generic:has(.campaign-create) .campaign-create{display:none}
+.generic:has(.campaign-create):after{content:'No live callbacks yet. Requested callbacks will appear here after Meera records them during customer calls.';display:block;max-width:760px;margin-top:24px;padding:22px;background:#fff;border:1px solid var(--line);border-radius:10px;color:var(--muted)}
