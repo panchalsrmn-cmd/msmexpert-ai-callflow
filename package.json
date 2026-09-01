@@ -23,6 +23,7 @@
     "fastify": "^5.12.1",
     "jose": "^6.2.9",
     "lucide-react": "latest",
+    "pg": "^8.23.0",
     "prisma": "^7.9.1",
     "react": "latest",
     "react-dom": "latest",

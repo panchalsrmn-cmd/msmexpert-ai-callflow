@@ -3,16 +3,12 @@ import fs from 'node:fs';
 import { WebSocketServer } from 'ws';
 import { GeminiLiveVoiceProvider } from './voice/providers/gemini-live.provider.js';
 import { resamplePcm16 } from './voice/audio/codec.js';
+import { createCrmBackend, finishCrmCall, initialiseCrm, startCrmCall } from './voice/crm/postgres-crm.mjs';
 
 const envFile = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf8') : '';
 for (const line of envFile.split(/\r?\n/)) { const match = line.match(/^([A-Z0-9_]+)=(.*)$/); if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, ''); }
 const config = { apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-12-2025', voiceName: process.env.GEMINI_VOICE_NAME || process.env.GEMINI_TTS_VOICE || 'Sulafat' };
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
-const backend = {
-  async lookupKnowledge({ query, category }) { return { ok: true, source: 'approved-demo-knowledge', query, category, answer: 'Trusted knowledge lookup is connected to the MSMExpert backend adapter. Replace this adapter with your approved knowledge service before production.' }; },
-  async updateLead(data) { return { ok: true, updated: data.fields }; }, async createCallback(data) { return { ok: true, callback: data }; },
-  async markDoNotCall(data) { return { ok: true, suppressed: true, leadId: data.leadId }; }, async requestHumanTransfer(data) { return { ok: true, transferRequested: true, leadId: data.leadId }; }
-};
 export function createVoiceServer({ webSocketPath = '/live', healthPath = '/health' } = {}) {
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.VOICE_ALLOWED_ORIGIN || 'http://127.0.0.1:5173');
@@ -22,9 +18,9 @@ const server = http.createServer((req, res) => {
 });
 const wss = new WebSocketServer({ server, path: webSocketPath });
 wss.on('connection', socket => {
-  let voice; let startedAt; let exotelStream; let exotelOutbound = Buffer.alloc(0);
+  let voice; let startedAt; let exotelStream; let exotelOutbound = Buffer.alloc(0); let crmCall;
   const send = payload => { if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(payload)); };
-  const closeVoice = async () => { if (voice) await voice.close(); voice = undefined; };
+  const closeVoice = async () => { if (voice) await voice.close(); voice = undefined; if (crmCall?.id) await finishCrmCall({ callId: crmCall.id }); };
   const startExotel = async message => {
     if (voice) return;
     const start = message.start || {};
@@ -34,9 +30,10 @@ wss.on('connection', socket => {
     if (!streamSid) throw new Error('Exotel start event is missing stream_sid.');
     exotelStream = { streamSid, sampleRate };
     startedAt = Date.now();
-    voice = await new GeminiLiveVoiceProvider({ ...config, backend }).connect({
+    crmCall = await startCrmCall({ phone: start.from, providerCallId: start.call_sid || streamSid });
+    voice = await new GeminiLiveVoiceProvider({ ...config, backend: createCrmBackend({ leadId: crmCall.lead.id, callId: crmCall.call?.id }) }).connect({
       callId: start.call_sid || streamSid,
-      lead: { phone: start.from, exotelCallSid: start.call_sid, ...(start.custom_parameters || {}) }
+      lead: { id: crmCall.lead.id, phone: start.from, exotelCallSid: start.call_sid, ...(start.custom_parameters || {}) },
     });
     voice.onAudio(chunk => {
       // Exotel requires 3,200–100,000 byte PCM frames, in multiples of 320.
@@ -68,7 +65,7 @@ wss.on('connection', socket => {
       if (message.type === 'start') {
         if (voice) return;
         startedAt = Date.now();
-        voice = await new GeminiLiveVoiceProvider({ ...config, backend }).connect({ callId: message.callId, lead: message.lead || {} });
+        voice = await new GeminiLiveVoiceProvider({ ...config, backend: createCrmBackend({ leadId: message.lead?.id, callId: message.callId }) }).connect({ callId: message.callId, lead: message.lead || {} });
         voice.onEvent(event => send({ type: 'event', event, latencyMs: Date.now() - startedAt })); voice.onTranscript(event => send({ type: 'transcript', event }));
         voice.onAudio(chunk => send({ type: 'audio', data: chunk.toString('base64'), mimeType: 'audio/pcm;rate=24000' })); voice.onError(error => send({ type: 'error', message: error.message }));
         return send({ type: 'ready', model: config.model, voice: config.voiceName });
@@ -89,5 +86,5 @@ return server;
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`) {
   const port = Number(process.env.PORT || process.env.VOICE_PORT || 3002);
   const host = process.env.VOICE_HOST || '127.0.0.1';
-  createVoiceServer().listen(port, host, () => console.log(`Meera Live gateway listening on ws://${host}:${port}/live (${config.model}, ${config.voiceName})`));
+  initialiseCrm().catch(error => console.error('CRM database unavailable:', error.message)).finally(() => createVoiceServer().listen(port, host, () => console.log(`Meera Live gateway listening on ws://${host}:${port}/live (${config.model}, ${config.voiceName})`)));
 }

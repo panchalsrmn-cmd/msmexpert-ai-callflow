@@ -1,0 +1,104 @@
+import pg from 'pg';
+
+let pool;
+const db = () => {
+  if (!process.env.DATABASE_URL) return null;
+  pool ||= new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false } });
+  return pool;
+};
+
+export async function initialiseCrm() {
+  const client = db();
+  if (!client) return false;
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS crm_leads (
+      id UUID PRIMARY KEY, phone TEXT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'NEW',
+      fields JSONB NOT NULL DEFAULT '{}'::jsonb, last_contacted_at TIMESTAMPTZ,
+      next_callback_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS crm_calls (
+      id UUID PRIMARY KEY, lead_id UUID NOT NULL, provider_call_id TEXT UNIQUE NOT NULL,
+      status TEXT NOT NULL, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS crm_events (
+      id UUID PRIMARY KEY, lead_id UUID NOT NULL, call_id UUID, type TEXT NOT NULL,
+      actor TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS crm_callbacks (
+      id UUID PRIMARY KEY, lead_id UUID NOT NULL, call_id UUID, scheduled_for TIMESTAMPTZ NOT NULL,
+      timezone TEXT NOT NULL, reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS crm_suppressions (
+      phone TEXT PRIMARY KEY, reason TEXT NOT NULL, call_id UUID, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  return true;
+}
+
+const id = () => crypto.randomUUID();
+const asDate = value => {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date(Date.now() + 24 * 60 * 60 * 1000) : parsed;
+};
+
+export async function startCrmCall({ phone, providerCallId }) {
+  const client = db();
+  if (!client || !phone) return { lead: { id: `phone:${phone || 'unknown'}`, phone }, call: null };
+  const leadId = id();
+  const leadResult = await client.query(
+    `INSERT INTO crm_leads (id, phone, status, last_contacted_at)
+     VALUES ($1, $2, 'CALLING', now())
+     ON CONFLICT (phone) DO UPDATE SET status = 'CALLING', last_contacted_at = now(), updated_at = now()
+     RETURNING id, phone`, [leadId, phone]
+  );
+  const lead = leadResult.rows[0];
+  const callId = id();
+  const callResult = await client.query(
+    `INSERT INTO crm_calls (id, lead_id, provider_call_id, status, started_at)
+     VALUES ($1, $2, $3, 'ANSWERED', now())
+     ON CONFLICT (provider_call_id) DO UPDATE SET status = 'ANSWERED' RETURNING id`,
+    [callId, lead.id, providerCallId]
+  );
+  await client.query(`INSERT INTO crm_events (id, lead_id, call_id, type, actor, payload) VALUES ($1, $2, $3, 'CALL_ANSWERED', 'AI', $4)`, [id(), lead.id, callResult.rows[0].id, JSON.stringify({ providerCallId })]);
+  return { lead, call: callResult.rows[0] };
+}
+
+export function createCrmBackend({ leadId, callId }) {
+  const client = db();
+  const active = () => Boolean(client && leadId && !leadId.startsWith('phone:'));
+  return {
+    async lookupKnowledge({ query, category }) { return { ok: true, source: 'approved-demo-knowledge', query, category, answer: 'Trusted knowledge lookup is connected to the MSMExpert backend adapter. Replace this adapter with your approved knowledge service before production.' }; },
+    async updateLead({ fields }) {
+      if (!active()) return { ok: true, queued: true, updated: fields };
+      const status = fields.interestLevel === 'high' ? 'INTERESTED' : 'CONTACTED';
+      await client.query(`UPDATE crm_leads SET fields = fields || $2::jsonb, status = $3, updated_at = now() WHERE id = $1`, [leadId, JSON.stringify(fields), status]);
+      await client.query(`INSERT INTO crm_events (id, lead_id, call_id, type, actor, payload) VALUES ($1, $2, $3, 'MEERA_LEAD_UPDATED', 'AI', $4)`, [id(), leadId, callId || null, JSON.stringify(fields)]);
+      return { ok: true, updated: fields };
+    },
+    async createCallback({ requestedTime, reason }) {
+      if (!active()) return { ok: true, queued: true };
+      const scheduledFor = asDate(requestedTime);
+      await client.query(`INSERT INTO crm_callbacks (id, lead_id, call_id, scheduled_for, timezone, reason) VALUES ($1, $2, $3, $4, 'Asia/Kolkata', $5)`, [id(), leadId, callId || null, scheduledFor, reason]);
+      await client.query(`UPDATE crm_leads SET status = 'CALLBACK', next_callback_at = $2, updated_at = now() WHERE id = $1`, [leadId, scheduledFor]);
+      return { ok: true };
+    },
+    async markDoNotCall({ reason }) {
+      if (!active()) return { ok: true, queued: true };
+      const lead = await client.query(`UPDATE crm_leads SET status = 'DO_NOT_CALL', updated_at = now() WHERE id = $1 RETURNING phone`, [leadId]);
+      await client.query(`INSERT INTO crm_suppressions (phone, reason, call_id) VALUES ($1, $2, $3) ON CONFLICT (phone) DO UPDATE SET reason = EXCLUDED.reason, call_id = EXCLUDED.call_id`, [lead.rows[0].phone, reason, callId || null]);
+      await client.query(`INSERT INTO crm_events (id, lead_id, call_id, type, actor, payload) VALUES ($1, $2, $3, 'DO_NOT_CALL', 'AI', $4)`, [id(), leadId, callId || null, JSON.stringify({ reason })]);
+      return { ok: true, suppressed: true };
+    },
+    async requestHumanTransfer({ reason }) {
+      if (!active()) return { ok: true, queued: true };
+      await client.query(`UPDATE crm_leads SET status = 'TRANSFERRED', updated_at = now() WHERE id = $1`, [leadId]);
+      await client.query(`INSERT INTO crm_events (id, lead_id, call_id, type, actor, payload) VALUES ($1, $2, $3, 'HUMAN_TRANSFER_REQUESTED', 'AI', $4)`, [id(), leadId, callId || null, JSON.stringify({ reason })]);
+      return { ok: true, transferRequested: true };
+    },
+  };
+}
+
+export async function finishCrmCall({ callId }) {
+  const client = db();
+  if (client && callId) await client.query(`UPDATE crm_calls SET status = 'COMPLETED', ended_at = now() WHERE id = $1`, [callId]);
+}
