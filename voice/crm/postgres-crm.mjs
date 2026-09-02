@@ -138,8 +138,8 @@ export async function getCrmReport() {
     client.query(`
       SELECT c.id, c.provider_call_id, c.status, c.recording_url, c.provider_disposition,
              c.duration_seconds, c.started_at, c.ended_at, l.phone, l.status AS lead_status,
-             COALESCE((SELECT t.text FROM crm_transcripts t WHERE t.call_id = c.id
-                       ORDER BY t.created_at DESC LIMIT 1), '') AS latest_answer
+             COALESCE((SELECT string_agg(t.speaker || ': ' || t.text, E'\\n' ORDER BY t.created_at)
+                       FROM crm_transcripts t WHERE t.call_id = c.id), '') AS conversation
       FROM crm_calls c JOIN crm_leads l ON l.id = c.lead_id
       ORDER BY c.started_at DESC NULLS LAST LIMIT 100
     `),
