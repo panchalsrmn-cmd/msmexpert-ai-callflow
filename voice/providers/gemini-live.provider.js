@@ -17,7 +17,9 @@ class GeminiLiveSession extends RealtimeVoiceSession {
       responseModalities: [Modality.AUDIO], systemInstruction: meeraSystemInstruction(options.lead),
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: provider.voiceName } } },
       inputAudioTranscription: {}, outputAudioTranscription: {}, tools: [{ functionDeclarations }],
-      realtimeInputConfig: { automaticActivityDetection: { disabled: false, prefixPaddingMs: 20, silenceDurationMs: 500 } }
+      // A short end-of-turn detector keeps the conversation natural on a phone call.
+      // The old 500 ms pause made every answer feel noticeably delayed.
+      realtimeInputConfig: { automaticActivityDetection: { disabled: false, prefixPaddingMs: 10, silenceDurationMs: 280 } }
     }, callbacks: { onopen: () => self.emit('session.connected'), onmessage: message => self.handle(message), onerror: event => self.fail(event.error || new Error('Gemini Live connection failed.')), onclose: () => self.emit('session.closed') } });
     return self;
   }

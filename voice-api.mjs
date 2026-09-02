@@ -53,7 +53,7 @@ wss.on('connection', socket => {
       // Exotel requires 3,200–100,000 byte PCM frames, in multiples of 320.
       exotelOutbound = Buffer.concat([exotelOutbound, resamplePcm16(chunk, 24000, sampleRate)]);
       while (exotelOutbound.length >= 3200) {
-        const bytes = Math.floor(Math.min(exotelOutbound.length, 16000) / 320) * 320;
+        const bytes = Math.floor(Math.min(exotelOutbound.length, 8000) / 320) * 320;
         const audio = exotelOutbound.subarray(0, bytes);
         exotelOutbound = exotelOutbound.subarray(bytes);
         send({ event: 'media', stream_sid: streamSid, media: { payload: audio.toString('base64') } });

@@ -2,5 +2,6 @@
 msmexpert-outreach-render/
 node_modules
 dist
+MSMExpert-Call-Recordings/
 
 .vercel
