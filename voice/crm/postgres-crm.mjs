@@ -130,3 +130,24 @@ export async function saveRecording({ providerCallId, recordingUrl, disposition,
   );
   return true;
 }
+
+export async function getCrmReport() {
+  const client = db();
+  if (!client) return { calls: [], callbacks: [] };
+  const [calls, callbacks] = await Promise.all([
+    client.query(`
+      SELECT c.id, c.provider_call_id, c.status, c.recording_url, c.provider_disposition,
+             c.duration_seconds, c.started_at, c.ended_at, l.phone, l.status AS lead_status,
+             COALESCE((SELECT t.text FROM crm_transcripts t WHERE t.call_id = c.id
+                       ORDER BY t.created_at DESC LIMIT 1), '') AS latest_answer
+      FROM crm_calls c JOIN crm_leads l ON l.id = c.lead_id
+      ORDER BY c.started_at DESC NULLS LAST LIMIT 100
+    `),
+    client.query(`
+      SELECT cb.id, cb.scheduled_for, cb.reason, cb.status, l.phone
+      FROM crm_callbacks cb JOIN crm_leads l ON l.id = cb.lead_id
+      WHERE cb.status = 'PENDING' ORDER BY cb.scheduled_for ASC LIMIT 100
+    `),
+  ]);
+  return { calls: calls.rows, callbacks: callbacks.rows };
+}

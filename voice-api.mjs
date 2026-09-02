@@ -1,19 +1,44 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { GeminiLiveVoiceProvider } from './voice/providers/gemini-live.provider.js';
 import { resamplePcm16 } from './voice/audio/codec.js';
-import { createCrmBackend, finishCrmCall, initialiseCrm, saveRecording, saveTranscript, startCrmCall } from './voice/crm/postgres-crm.mjs';
+import { createCrmBackend, finishCrmCall, getCrmReport, initialiseCrm, saveRecording, saveTranscript, startCrmCall } from './voice/crm/postgres-crm.mjs';
 
 const envFile = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf8') : '';
 for (const line of envFile.split(/\r?\n/)) { const match = line.match(/^([A-Z0-9_]+)=(.*)$/); if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, ''); }
 const config = { apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-12-2025', voiceName: process.env.GEMINI_VOICE_NAME || process.env.GEMINI_TTS_VOICE || 'Sulafat' };
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
+const crmHtml = () => fs.readFileSync(new URL('./crm/index.html', import.meta.url));
+const crmAuthorised = request => {
+  const expected = process.env.CRM_DASHBOARD_PASSWORD;
+  const header = request.headers.authorization || '';
+  if (!expected || !header.startsWith('Basic ')) return false;
+  const supplied = Buffer.from(header.slice(6), 'base64').toString('utf8');
+  const expectedValue = `admin:${expected}`;
+  return supplied.length === expectedValue.length && timingSafeEqual(Buffer.from(supplied), Buffer.from(expectedValue));
+};
+const crmChallenge = res => { res.writeHead(401, { 'www-authenticate': 'Basic realm="MSMExpert CRM", charset="UTF-8"', 'cache-control': 'no-store' }); res.end('CRM sign-in required'); };
 export function createVoiceServer({ webSocketPath = '/live', healthPath = '/health' } = {}) {
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.VOICE_ALLOWED_ORIGIN || 'http://127.0.0.1:5173');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  if (url.pathname === '/crm' || url.pathname === '/crm/') {
+    if (!process.env.CRM_DASHBOARD_PASSWORD) return json(res, 503, { error: 'CRM dashboard is not configured.' });
+    if (!crmAuthorised(req)) return crmChallenge(res);
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(crmHtml());
+  }
+  if (url.pathname === '/crm/api/report') {
+    if (!process.env.CRM_DASHBOARD_PASSWORD) return json(res, 503, { error: 'CRM dashboard is not configured.' });
+    if (!crmAuthorised(req)) return crmChallenge(res);
+    return getCrmReport().then(report => json(res, 200, report)).catch(error => {
+      console.error('CRM report error:', error.message);
+      json(res, 500, { error: 'CRM report unavailable.' });
+    });
+  }
   if (req.method === 'GET' && url.pathname === '/exotel/stream-complete') {
     const providerCallId = url.searchParams.get('callsid') || url.searchParams.get('call_sid');
     saveRecording({
